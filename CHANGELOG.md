@@ -4,6 +4,15 @@ All notable changes to rules_gitlab. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/) — version headers
 mirror the published bazel-registry entries.
 
+## 0.1.3 — ruamel.yaml multi-constructor signature fix
+
+v0.1.2 registered an `add_multi_constructor` on `!`-prefixed tags
+but used a `(self, node)` signature when ruamel calls
+`(loader, tag_suffix, node)`. Real builds failed at runtime with
+`_absorb_unknown_tag() takes 2 positional arguments but 3 were
+given`. v0.1.3 fixes the signature + dispatches explicitly on
+node type via `ruamel.yaml.nodes`.
+
 ## 0.1.2 — actually parse GitLab custom YAML tags via ruamel.yaml
 
 v0.1.1 attempted to absorb GitLab's `!reference` / `!file` /

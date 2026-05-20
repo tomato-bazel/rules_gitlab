@@ -31,36 +31,33 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 from ruamel.yaml.constructor import SafeConstructor
+from ruamel.yaml.nodes import MappingNode, ScalarNode, SequenceNode
 
 from check_jsonschema.cli import main as check_jsonschema_main
 
 
-def _absorb_unknown_tag(self, node):  # type: ignore[no-untyped-def]
-    """Generic ruamel.yaml constructor that maps any unknown
-    `!tag`-prefixed node to its underlying Python value. Used to
-    tolerate GitLab's custom CI YAML tags that no third-party
-    parser knows about.
+def _absorb_unknown_tag(loader, suffix, node):  # type: ignore[no-untyped-def]
+    """Generic ruamel.yaml multi-constructor. add_multi_constructor
+    passes the loader instance, the matched tag suffix, and the
+    node — we ignore the suffix and just hand back the underlying
+    Python value (scalar / sequence / mapping) so GitLab's custom
+    `!`-prefixed CI tags don't blow up parsing.
     """
-    if hasattr(node, "value") and isinstance(node.value, str):
-        return self.construct_scalar(node)
-    try:
-        return self.construct_sequence(node)
-    except Exception:
-        pass
-    try:
-        return self.construct_mapping(node, deep=True)
-    except Exception:
-        pass
+    if isinstance(node, ScalarNode):
+        return loader.construct_scalar(node)
+    if isinstance(node, SequenceNode):
+        return loader.construct_sequence(node, deep=True)
+    if isinstance(node, MappingNode):
+        return loader.construct_mapping(node, deep=True)
     return None
 
 
 def _make_tolerant_yaml() -> YAML:
     yaml = YAML(typ="safe")
-    # The `\0` SafeConstructor.add_multi_constructor pattern
-    # catches every tag whose name starts with `!`. ruamel's
-    # SafeConstructor matches on tag prefix; passing an empty
-    # string means "all tags" (we narrow to the `!`-prefix
-    # bucket by registering on the `!` short-form).
+    # add_multi_constructor on `!` catches every tag whose handle
+    # is the local `!` shortcut (GitLab's `!reference`, `!file`,
+    # `!base64`, …). Tags with explicit `!!`-style standard
+    # prefixes use ruamel's built-in constructors.
     SafeConstructor.add_multi_constructor("!", _absorb_unknown_tag)
     return yaml
 
