@@ -1,12 +1,20 @@
 """Entry point for the `gitlab_ci_validate` Bazel rule.
 
-A thin wrapper around `check-jsonschema` (a pip dep brought in via
-the `@savvi_tooling` hub) that:
+A wrapper around `check-jsonschema` (a pip dep brought in via the
+`@rules_gitlab_tooling` hub) that:
 
   1. Loads the pinned GitLab CI JSON Schema (passed via argv).
-  2. Validates a single `.gitlab-ci.yml` against it.
-  3. On success, writes a single-line stamp file so Bazel knows the
-     check ran cleanly (caching keys on the file's mtime/content).
+  2. Parses the `.gitlab-ci.yml` with `ruamel.yaml`, registering
+     constructors that absorb GitLab's custom CI YAML tags
+     (`!reference`, `!file`, `!base64`, …). check-jsonschema's
+     default loader rejects these tags with `ConstructorError`,
+     making real-world GitLab configs unparseable.
+  3. Dumps the parsed structure to a temp JSON file.
+  4. Invokes check-jsonschema's CLI with the JSON file +
+     `--schemafile` pointing at the pinned schema, bypassing its
+     YAML parser entirely.
+  5. On success, writes a single-line stamp file so Bazel knows
+     the check ran cleanly (caching keys on the file's contents).
 
 Errors are printed to stderr with file:line context. Exit code is
 the check-jsonschema runner's exit code — non-zero for any
@@ -16,41 +24,45 @@ violation.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import tempfile
 from pathlib import Path
 
-import yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.constructor import SafeConstructor
 
 from check_jsonschema.cli import main as check_jsonschema_main
 
 
-def _install_gitlab_yaml_tag_tolerance() -> None:
-    """Teach PyYAML to ignore GitLab-specific custom YAML tags.
-
-    GitLab CI YAML uses constructs like `!reference [.aws_env, vars]`
-    and `!file`, `!base64` — non-standard YAML tags that GitLab's
-    server-side parser handles but PyYAML's default loader rejects
-    with `ConstructorError: could not determine a constructor for
-    the tag '!reference'`.
-
-    We register a generic constructor that returns the underlying
-    Python value (string / list / mapping) for any unknown `!tag`,
-    effectively making the parser treat them as no-ops. The JSON
-    Schema validator then sees the structural shape (lists stay
-    lists, etc.) and validates it; it's the trade-off for being
-    able to validate real-world GitLab CI files at all.
+def _absorb_unknown_tag(self, node):  # type: ignore[no-untyped-def]
+    """Generic ruamel.yaml constructor that maps any unknown
+    `!tag`-prefixed node to its underlying Python value. Used to
+    tolerate GitLab's custom CI YAML tags that no third-party
+    parser knows about.
     """
+    if hasattr(node, "value") and isinstance(node.value, str):
+        return self.construct_scalar(node)
+    try:
+        return self.construct_sequence(node)
+    except Exception:
+        pass
+    try:
+        return self.construct_mapping(node, deep=True)
+    except Exception:
+        pass
+    return None
 
-    def _generic_constructor(loader: yaml.Loader, _suffix: str, node: yaml.Node):
-        if isinstance(node, yaml.ScalarNode):
-            return loader.construct_scalar(node)
-        if isinstance(node, yaml.SequenceNode):
-            return loader.construct_sequence(node)
-        return loader.construct_mapping(node)
 
-    for loader_cls in (yaml.Loader, yaml.SafeLoader, yaml.FullLoader):
-        loader_cls.add_multi_constructor("!", _generic_constructor)
-        loader_cls.add_multi_constructor("tag:yaml.org,2002:", _generic_constructor)
+def _make_tolerant_yaml() -> YAML:
+    yaml = YAML(typ="safe")
+    # The `\0` SafeConstructor.add_multi_constructor pattern
+    # catches every tag whose name starts with `!`. ruamel's
+    # SafeConstructor matches on tag prefix; passing an empty
+    # string means "all tags" (we narrow to the `!`-prefix
+    # bucket by registering on the `!` short-form).
+    SafeConstructor.add_multi_constructor("!", _absorb_unknown_tag)
+    return yaml
 
 
 def main(argv: list[str]) -> int:
@@ -65,33 +77,45 @@ def main(argv: list[str]) -> int:
     )
     args = ap.parse_args(argv)
 
-    _install_gitlab_yaml_tag_tolerance()
+    yaml = _make_tolerant_yaml()
+    try:
+        with open(args.src) as f:
+            data = yaml.load(f)
+    except Exception as e:
+        print(
+            f"gitlab_ci_validate: failed to parse {args.src} as YAML: {e}",
+            file=sys.stderr,
+        )
+        return 2
 
-    # check-jsonschema's `main` is a click entry point — calls
-    # sys.exit() at the end. Pre-build its argv so it exits with
-    # the right code; we catch SystemExit to write the stamp.
+    # Dump to a temp JSON file so check-jsonschema's standard JSON
+    # path handles it (sidesteps its ruamel-yaml parser, which
+    # rejects unknown tags before our constructor would fire).
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".json",
+        delete=False,
+    ) as tmp:
+        json.dump(data, tmp, default=str)
+        tmp_path = tmp.name
+
     check_argv = [
         "--schemafile",
         str(args.schema),
-        # GitLab's .gitlab-ci.yml uses Perl-style slash-delimited
-        # regex literals for fields like `coverage:` (e.g.
-        # `/^TOTAL\s+\d+/`). GitLab's runtime parser strips the
-        # leading/trailing `/`s before compiling, but the JSON
-        # Schema declares those fields with `format: regex` and
-        # check-jsonschema's strict format validator rejects the
-        # wrapped form. Skip just the regex format check —
-        # everything else (`uri`, `date-time`, structural) stays on.
+        # GitLab uses Perl-style slash-delimited regex literals
+        # for fields like `coverage:` (`/^TOTAL\s+\d+/`); strip
+        # the regex format check so those don't fail validation.
+        # Everything else (`uri`, structural, additionalProperties)
+        # stays enforced.
         "--disable-formats",
         "regex",
         "--verbose",
-        str(args.src),
+        tmp_path,
     ]
     try:
         check_jsonschema_main(check_argv)
         rc = 0
     except SystemExit as e:
-        # click main() raises SystemExit(0) on success; non-zero on
-        # validation failure.
         rc = int(e.code) if e.code is not None else 0
     if rc == 0:
         args.stamp.write_text(

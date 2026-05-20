@@ -4,6 +4,25 @@ All notable changes to rules_gitlab. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/) — version headers
 mirror the published bazel-registry entries.
 
+## 0.1.2 — actually parse GitLab custom YAML tags via ruamel.yaml
+
+v0.1.1 attempted to absorb GitLab's `!reference` / `!file` /
+`!base64` tags by registering PyYAML constructors. That didn't
+work in practice because `check-jsonschema` uses `ruamel.yaml`
+(not PyYAML) for YAML loading — the PyYAML monkey-patch never
+fired and the parse still failed with `ConstructorError`.
+
+v0.1.2 restructures the validator: load the YAML ourselves with
+`ruamel.yaml` + a generic constructor that absorbs `!`-prefixed
+tags, dump to a temp JSON file, and pass that JSON to
+`check-jsonschema` — sidestepping its YAML parser entirely.
+
+- Dropped the PyYAML dep added in 0.1.1.
+- Direct dep on `ruamel.yaml` (already a transitive dep of
+  check-jsonschema; pinned explicitly so rules_python sees it).
+- Verified end-to-end against selectsmart-employers'
+  `.gitlab-ci.yml` (uses `!reference [.aws_environment, before_script]`).
+
 ## 0.1.1 — GitLab custom YAML tags
 
 Real-world `.gitlab-ci.yml` files use non-standard YAML tags
