@@ -1,12 +1,39 @@
 # rules_gitlab
 
-Bazel rules for working with GitLab CI configuration. Today: two
-rules.
+Bazel rules for working with GitLab CI configuration.
 
 | Rule | What | Hermetic |
 |---|---|---|
+| `gitlab_ci(name, jobs, …, write_to)` | **Generate** a `.gitlab-ci.yml` from a typed Starlark spec (`gitlab_job` / `gitlab_reference` helpers); deterministic YAML via ruamel. Auto-chains `gitlab_ci_validate` + an optional `<name>.update` write-back. | ✅ |
 | `gitlab_ci_validate(name, src)` | Validate `.gitlab-ci.yml` against the official GitLab JSON Schema (pinned by sha256 against `gitlab-org/gitlab-foss/.../editor/schema/ci.json` — the file GitLab's web editor uses). | ✅ |
 | `gitlab_ci_lint(name, src, repo)` | `bazel run`-able target wrapping `glab ci lint <src>`. Hits the GitLab API for server-side lint (resolves `include:` references, applies semantic checks). | Network + auth |
+
+## Generate a `.gitlab-ci.yml`
+
+```python
+load("@rules_gitlab//gitlab:defs.bzl", "gitlab_ci", "gitlab_job", "gitlab_reference")
+
+gitlab_ci(
+    name = "ci",
+    stages = ["build", "test"],
+    variables = {"GREETING": "hello"},
+    jobs = {
+        ".setup": gitlab_job(before_script = ["echo setting up"]),
+        "build": gitlab_job(
+            stage = "build",
+            before_script = gitlab_reference(".setup", "before_script"),
+            script = ['echo "$GREETING from build"'],
+        ),
+        "test": gitlab_job(stage = "test", script = ["pytest"], coverage = "/^TOTAL/"),
+    },
+    write_to = ".gitlab-ci.yml",  # `bazel run :ci.update` writes it back
+)
+```
+
+`bazel run :ci.update` writes `.gitlab-ci.yml`; `bazel test :ci.update`
+checks it's current; the auto-wired `:ci_validate` schema-checks the
+generated file. Unmodeled keys go through `gitlab_job(extra={...})` or
+`gitlab_ci(extra={...})`.
 
 ## Quick start
 

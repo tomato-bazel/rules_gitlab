@@ -21,3 +21,17 @@ py_binary(
     ],
     visibility = ["//visibility:public"],
 )
+
+# YAML emitter invoked by the `gitlab_ci` generation rule. Takes the
+# canonical JSON spec (assembled in Starlark) and ruamel.yaml-dumps a
+# deterministic `.gitlab-ci.yml`, reviving `!reference` tags from
+# sentinels (symmetric to validate's tolerant loader).
+py_binary(
+    name = "emit",
+    srcs = ["emit_main.py"],
+    main = "emit_main.py",
+    deps = [
+        requirement("ruamel.yaml"),
+    ],
+    visibility = ["//visibility:public"],
+)

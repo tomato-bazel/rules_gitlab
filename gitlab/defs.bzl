@@ -30,6 +30,7 @@ Limitations of `gitlab_ci_validate`:
     target. `gitlab_ci_lint` handles includes server-side.
 """
 
+load("@aspect_bazel_lib//lib:write_source_files.bzl", "write_source_files")
 load("//gitlab/glab:toolchain_type.bzl", "GLAB_TOOLCHAIN_TYPE")
 
 def _gitlab_ci_validate_impl(ctx):
@@ -177,3 +178,190 @@ gitlab_ci_lint = rule(
     },
     toolchains = [GLAB_TOOLCHAIN_TYPE],
 )
+
+# ─── gitlab_ci: generate a .gitlab-ci.yml from a typed Starlark spec ──
+#
+# The Starlark side assembles the spec in a fixed canonical key order
+# and `json.encode`s it; the `//gitlab/private:emit` ruamel.yaml binary
+# dumps it deterministically to `.gitlab-ci.yml` (reviving `!reference`
+# tags). The macro then chains `gitlab_ci_validate` (build-time schema
+# gate) and aspect_bazel_lib `write_source_files` (`<name>.update`:
+# `bazel run` writes the file back into the tree, `bazel test` checks it
+# is current). Same generate→write_source_files shape as rules_vscode.
+
+def _gitlab_ci_impl(ctx):
+    out = ctx.actions.declare_file(ctx.attr.out)
+    spec = ctx.actions.declare_file(ctx.label.name + ".spec.json")
+    ctx.actions.write(spec, ctx.attr.spec_json)
+    args = ctx.actions.args()
+    args.add("--spec", spec.path)
+    args.add("--out", out.path)
+    ctx.actions.run(
+        executable = ctx.executable._emitter,
+        arguments = [args],
+        inputs = [spec],
+        outputs = [out],
+        mnemonic = "GitlabCiEmit",
+        progress_message = "Emitting .gitlab-ci.yml (%s)" % ctx.label,
+    )
+    return [DefaultInfo(files = depset([out]))]
+
+_gitlab_ci = rule(
+    implementation = _gitlab_ci_impl,
+    doc = "Emit a `.gitlab-ci.yml` from a canonical JSON spec (use the `gitlab_ci` macro, not this rule directly).",
+    attrs = {
+        "out": attr.string(mandatory = True, doc = "Output filename."),
+        "spec_json": attr.string(mandatory = True, doc = "Canonical JSON spec, pre-encoded by the macro."),
+        "_emitter": attr.label(
+            default = "//gitlab/private:emit",
+            executable = True,
+            cfg = "exec",
+        ),
+    },
+)
+
+def gitlab_job(
+        stage = None,
+        script = None,
+        image = None,
+        services = None,
+        before_script = None,
+        after_script = None,
+        rules = None,
+        needs = None,
+        artifacts = None,
+        variables = None,
+        cache = None,
+        tags = None,
+        environment = None,
+        when = None,
+        allow_failure = None,
+        interruptible = None,
+        timeout = None,
+        retry = None,
+        parallel = None,
+        coverage = None,
+        extends = None,
+        dependencies = None,
+        extra = {}):
+    """Build one GitLab CI job as a `None`-stripped, key-ordered dict.
+
+    Returns a plain dict (Starlark structs aren't `json.encode`-able), so
+    pass the result as a value in `gitlab_ci(jobs = {...})`. Any key not
+    modeled here can be supplied via `extra` (a raw dict, merged last).
+    """
+    modeled = {
+        "extends": extends,
+        "stage": stage,
+        "image": image,
+        "services": services,
+        "variables": variables,
+        "cache": cache,
+        "before_script": before_script,
+        "script": script,
+        "after_script": after_script,
+        "artifacts": artifacts,
+        "rules": rules,
+        "needs": needs,
+        "dependencies": dependencies,
+        "tags": tags,
+        "environment": environment,
+        "when": when,
+        "allow_failure": allow_failure,
+        "interruptible": interruptible,
+        "timeout": timeout,
+        "retry": retry,
+        "parallel": parallel,
+        "coverage": coverage,
+    }
+    # Drop unset fields; the emitter applies the canonical key order, so the
+    # dict order here doesn't matter (json.encode sorts it regardless).
+    job = {k: v for k, v in modeled.items() if v != None}
+    for k, v in extra.items():
+        job[k] = v
+    return job
+
+def gitlab_reference(*parts):
+    """Emit a GitLab `!reference [job, key, ...]` tag value.
+
+    Usable as a value anywhere in a spec; survives `json.encode` as a
+    sentinel the emitter turns back into a real `!reference` YAML tag.
+    """
+    return {"__gitlab_reference__": list(parts)}
+
+def gitlab_ci(
+        name,
+        stages = [],
+        variables = {},
+        default = None,
+        image = None,
+        include = None,
+        workflow = None,
+        jobs = {},
+        extra = {},
+        out = None,
+        write_to = None,
+        validate = True,
+        **kwargs):
+    """Generate a `.gitlab-ci.yml` from a typed Starlark spec.
+
+    Assembles the spec in a fixed top-level order (include, workflow,
+    default, image, stages, variables, jobs sorted by name, extra),
+    emits it deterministically as YAML, and (by default) schema-validates
+    the result. Set `write_to` (e.g. `".gitlab-ci.yml"`) to also create
+    `<name>.update` — `bazel run …:<name>.update` writes the file into the
+    source tree; `bazel test …:<name>.update` checks it is up to date.
+
+    Args:
+      name: target name.
+      stages: list of stage names (order preserved).
+      variables: global CI variables (dict).
+      default: the `default:` job-config block (dict).
+      image: top-level default image (str or dict).
+      include: `include:` entries (list).
+      workflow: the `workflow:` block (dict).
+      jobs: dict of job-name -> job (a `gitlab_job(...)` dict or a raw dict).
+      extra: escape hatch — raw dict merged at the top level last.
+      out: output filename; defaults to `<name>.gitlab-ci.yml`.
+      write_to: source-relative path to also create `<name>.update`.
+      validate: chain `gitlab_ci_validate` on the generated file (default True).
+      **kwargs: forwarded to the underlying rule (visibility, tags, …).
+    """
+    out = out if out else (name + ".gitlab-ci.yml")
+
+    spec = {}
+    if include != None:
+        spec["include"] = include
+    if workflow != None:
+        spec["workflow"] = workflow
+    if default != None:
+        spec["default"] = default
+    if image != None:
+        spec["image"] = image
+    if stages:
+        spec["stages"] = stages
+    if variables:
+        spec["variables"] = variables
+    for job_name in sorted(jobs.keys()):
+        spec[job_name] = jobs[job_name]
+    for k, v in extra.items():
+        spec[k] = v
+
+    _gitlab_ci(
+        name = name,
+        out = out,
+        spec_json = json.encode(spec),
+        **kwargs
+    )
+    if validate:
+        gitlab_ci_validate(
+            name = name + "_validate",
+            src = ":" + name,
+            **{k: kwargs[k] for k in ["visibility"] if k in kwargs}
+        )
+    if write_to:
+        write_source_files(
+            name = name + ".update",
+            files = {write_to: ":" + name},
+            visibility = kwargs.get("visibility", None),
+        )

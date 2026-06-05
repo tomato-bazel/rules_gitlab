@@ -1,0 +1,26 @@
+load("@aspect_bazel_lib//lib:write_source_files.bzl", "write_source_files")
+load("@bazel_skylib//rules:diff_test.bzl", "diff_test")
+load("@stardoc//stardoc:stardoc.bzl", "stardoc")
+
+package(default_visibility = ["//visibility:private"])
+
+# API reference generated from //gitlab:defs.bzl docstrings. The
+# committed defs.md is gated by diff_test; `bazel run //docs:update`
+# refreshes it.
+stardoc(
+    name = "defs_doc",
+    out = "defs.md.generated",
+    input = "//gitlab:defs.bzl",
+    deps = ["//gitlab:defs_bzl"],
+)
+
+diff_test(
+    name = "defs_doc_up_to_date",
+    file1 = "defs.md",
+    file2 = ":defs_doc",
+)
+
+write_source_files(
+    name = "update",
+    files = {"defs.md": ":defs_doc"},
+)

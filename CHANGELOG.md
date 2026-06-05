@@ -4,6 +4,30 @@ All notable changes to rules_gitlab. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/) — version headers
 mirror the published bazel-registry entries.
 
+## 0.2.0 — `gitlab_ci` generation rule
+
+Adds `gitlab_ci` — generate a `.gitlab-ci.yml` from a typed Starlark
+spec (the D14 CI-generation prereq), mirroring the
+rules_jsonschema / rules_vscode "schema-is-the-source, emit
+canonically" pattern.
+
+- `gitlab_ci(name, stages, variables, default, image, include,
+  workflow, jobs, extra, out, write_to, validate)` assembles the
+  spec and emits a deterministic `.gitlab-ci.yml` via a new
+  ruamel.yaml emitter (`//gitlab/private:emit`). Auto-chains
+  `gitlab_ci_validate` (build-time schema gate) and, when
+  `write_to` is set, aspect_bazel_lib `write_source_files`
+  (`bazel run :<name>.update` writes the file back; `bazel test`
+  checks it is current).
+- `gitlab_job(...)` builds one job (drops unset fields); `jobs`
+  also accepts a raw dict. `gitlab_reference("job","key")` emits a
+  GitLab `!reference [job, key]` tag (round-trips through the
+  emitter + validator).
+- Key order is canonical + deterministic (the emitter applies a
+  fixed priority, then sorts the rest), so generated files diff
+  cleanly.
+- New dep: `aspect_bazel_lib` 2.22.5 (write_source_files).
+
 ## 0.1.3 — ruamel.yaml multi-constructor signature fix
 
 v0.1.2 registered an `add_multi_constructor` on `!`-prefixed tags

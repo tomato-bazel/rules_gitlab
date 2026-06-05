@@ -10,7 +10,10 @@ exports_files([
 bzl_library(
     name = "defs_bzl",
     srcs = ["defs.bzl"],
-    deps = ["//gitlab/glab:toolchain_type_bzl"],
+    deps = [
+        "//gitlab/glab:toolchain_type_bzl",
+        "@aspect_bazel_lib//lib:write_source_files",
+    ],
 )
 
 bzl_library(
