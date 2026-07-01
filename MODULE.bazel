@@ -6,7 +6,7 @@
 # rules for authoring `.gitlab-ci.yml` from Starlark.
 module(
     name = "rules_gitlab",
-    version = "0.3.3",
+    version = "0.3.4",
 )
 
 bazel_dep(name = "platforms", version = "1.0.0")
@@ -26,15 +26,19 @@ bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 # tomllib ≥3.11; 0.7.3 ran bare python3 = macOS system 3.9).
 bazel_dep(name = "rules_uv", version = "0.7.4")
 
-# Pick a Python interpreter for the validator binary. 3.12 is the
-# fastverk default; the validator itself is interpreter-agnostic
-# (pure check-jsonschema + stdlib).
+# Register a hermetic Python 3.12 for the validator binary. NOT a dev_dependency:
+# the validate tool (gitlab/private/validate, python_version=3.12) runs in EVERY
+# consumer, so the 3.12 toolchain must propagate to consumers — a dev_dependency
+# extension only activates when rules_gitlab is the ROOT module, so as a transitive
+# dep the pin fell back to the consumer's default python (3.11 in CI) and
+# check-jsonschema's cp312 rpds-py ext failed (ModuleNotFoundError: rpds.rpds).
+# is_default=False so we register 3.12 as AVAILABLE for the pin without overriding
+# the consumer's own default interpreter.
 python = use_extension(
     "@rules_python//python/extensions:python.bzl",
     "python",
-    dev_dependency = True,
 )
-python.toolchain(python_version = "3.12", is_default = True)
+python.toolchain(python_version = "3.12", is_default = False)
 
 uv = use_extension("@rules_uv//uv:extensions.bzl", "uv")
 use_repo(uv, "uv", "uv_source")
