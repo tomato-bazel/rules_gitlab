@@ -164,6 +164,54 @@ modeled here can be supplied via `extra` (a raw dict, merged last).
 | <a id="gitlab_job-extra"></a>extra |  <p align="center"> - </p>   |  `{}` |
 
 
+<a id="gitlab_pages_job"></a>
+
+## gitlab_pages_job
+
+<pre>
+load("@rules_gitlab//gitlab:defs.bzl", "gitlab_pages_job")
+
+gitlab_pages_job(<a href="#gitlab_pages_job-site">site</a>, <a href="#gitlab_pages_job-site_artifact">site_artifact</a>, <a href="#gitlab_pages_job-stage">stage</a>, <a href="#gitlab_pages_job-strip_components">strip_components</a>, <a href="#gitlab_pages_job-only_default_branch">only_default_branch</a>, <a href="#gitlab_pages_job-rules">rules</a>, <a href="#gitlab_pages_job-kwargs">**kwargs</a>)
+</pre>
+
+A GitLab Pages job that publishes a Bazel-built static site.
+
+GitLab Pages serves the `public/` artifact of a job named `pages`. This
+builds `site` (a target whose output `site_artifact` is a `.tar.gz` of the
+site root — e.g. an `mdbook_book` or any `pkg_tar` of HTML) and unpacks it
+into `public/`. The generic "ship this repo's static site to Pages" job:
+
+    gitlab_ci(
+        name = "ci",
+        stages = ["pages"],
+        jobs = {
+            "pages": gitlab_pages_job(
+                site = "//docs:site",
+                site_artifact = "bazel-bin/docs/site.tar.gz",
+            ),
+        },
+    )
+
+
+**PARAMETERS**
+
+
+| Name  | Description | Default Value |
+| :------------- | :------------- | :------------- |
+| <a id="gitlab_pages_job-site"></a>site |  the Bazel label (string) that builds the static site.   |  none |
+| <a id="gitlab_pages_job-site_artifact"></a>site_artifact |  workspace-relative path to the built site `.tar.gz`.   |  none |
+| <a id="gitlab_pages_job-stage"></a>stage |  the CI stage for the job (default `"pages"`).   |  `"pages"` |
+| <a id="gitlab_pages_job-strip_components"></a>strip_components |  tar `--strip-components`, for archives with a top-level directory. mdbook's output is flat, so the default `0` is correct.   |  `0` |
+| <a id="gitlab_pages_job-only_default_branch"></a>only_default_branch |  when True (default) and `rules` is unset, restrict the job to the default branch — Pages publishes from a single ref.   |  `True` |
+| <a id="gitlab_pages_job-rules"></a>rules |  explicit GitLab `rules:`; overrides `only_default_branch`.   |  `None` |
+| <a id="gitlab_pages_job-kwargs"></a>kwargs |  any other `gitlab_job` field (needs, variables, image, …).   |  none |
+
+**RETURNS**
+
+A job dict for use as a `gitlab_ci(jobs = {...})` value. The job name
+MUST be `"pages"` for GitLab to publish it.
+
+
 <a id="gitlab_reference"></a>
 
 ## gitlab_reference

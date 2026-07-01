@@ -11,6 +11,13 @@ py_binary(
     name = "validate",
     srcs = ["validate_main.py"],
     main = "validate_main.py",
+    # PIN the interpreter to 3.12 — the version this tool's pip lock (//tooling:uv.lock)
+    # resolves its wheels for, incl. check-jsonschema's native-ext transitive dep rpds-py
+    # (rpds.cpython-312-darwin.so). Without this the tool runs under the CONSUMER's default
+    # python (3.11 — a dependency's is_default is ignored), and a 3.11 interpreter silently
+    # skips the cp312 .so → `ModuleNotFoundError: No module named 'rpds.rpds'`. Pinning makes
+    # validate work in any consumer regardless of their default python.
+    python_version = "3.12",
     deps = [
         requirement("check-jsonschema"),
         # Direct dep on ruamel.yaml so the wrapper can register a
@@ -30,6 +37,9 @@ py_binary(
     name = "emit",
     srcs = ["emit_main.py"],
     main = "emit_main.py",
+    # Same 3.12 pin as validate — match the tooling pip lock + keep both tools on one
+    # interpreter regardless of the consumer's default python.
+    python_version = "3.12",
     deps = [
         requirement("ruamel.yaml"),
     ],
